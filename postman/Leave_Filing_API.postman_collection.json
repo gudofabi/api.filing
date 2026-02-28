@@ -1,0 +1,282 @@
+{
+  "info": {
+    "_postman_id": "f7a0f3a1-b3d1-4eb0-b3c4-6a9f9f8f6b11",
+    "name": "Leave Filing API",
+    "description": "Collection for the Leave Filing REST endpoint.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "System - Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/up",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "up"
+          ]
+        },
+        "description": "Laravel health check endpoint."
+      },
+      "response": []
+    },
+    {
+      "name": "Leave Requests - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/leave-requests?employee_id={{employee_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "leave-requests"
+          ],
+          "query": [
+            {
+              "key": "employee_id",
+              "value": "{{employee_id}}",
+              "description": "Optional. Remove this query param to list all leave requests."
+            }
+          ]
+        },
+        "description": "Lists leave requests. Supports optional filter by employee_id."
+      },
+      "response": []
+    },
+    {
+      "name": "Create Leave Request",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employee_id\": {{employee_id}},\n  \"start_date\": \"2026-03-03\",\n  \"end_date\": \"2026-03-05\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/leave-requests",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "leave-requests"
+          ]
+        },
+        "description": "Files a leave request with overlap validation and holiday-aware deductible day calculation."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 201\", function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "pm.test(\"Response has leave data\", function () {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json).to.have.property(\"data\");",
+              "  pm.expect(json.data).to.have.property(\"id\");",
+              "  pm.expect(json.data).to.have.property(\"employee_id\");",
+              "  pm.expect(json.data).to.have.property(\"start_date\");",
+              "  pm.expect(json.data).to.have.property(\"end_date\");",
+              "  pm.expect(json.data).to.have.property(\"deductible_days\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Employees - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/employees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "employees"
+          ]
+        },
+        "description": "Returns all employees."
+      },
+      "response": []
+    },
+    {
+      "name": "Employees - Create",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Jane Employee\",\n  \"email\": \"jane.employee@example.com\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/employees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "employees"
+          ]
+        },
+        "description": "Creates an employee and stores ID into collection variable `employee_id`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 201\", function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const json = pm.response.json();",
+              "if (json.data && json.data.id) {",
+              "  pm.collectionVariables.set(\"employee_id\", json.data.id);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Holidays - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/holidays",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "holidays"
+          ]
+        },
+        "description": "Returns all holidays."
+      },
+      "response": []
+    },
+    {
+      "name": "Holidays - Create",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"date\": \"{{holiday_date}}\",\n  \"name\": \"Founders Day\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/holidays",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "holidays"
+          ]
+        },
+        "description": "Creates a holiday date used by leave deduction."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "employee_id",
+      "value": "1"
+    },
+    {
+      "key": "holiday_date",
+      "value": "2026-07-01"
+    }
+  ]
+}
