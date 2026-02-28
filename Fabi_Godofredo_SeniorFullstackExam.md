@@ -1,238 +1,320 @@
 # Lastname_Firstname_SeniorFullstackExam
 
-## A. Architecture Design
+---
 
-### High-Level System Architecture Diagram
+# A. Architecture Design
+
+## High-Level System Architecture
 
 ```mermaid
 flowchart LR
-    A[HR/Admin UI or API Client] --> B[API Gateway / Laravel API]
-    B --> C[Auth + Validation Layer]
-    C --> D[Payroll Service]
-    C --> E[Leave Service]
-    C --> F[Employee Service]
-    D --> G[(MySQL Primary)]
-    E --> G
-    F --> G
-    D --> H[(Redis Cache)]
-    E --> H
-    D --> I[Queue: Redis/SQS]
-    I --> J[Payroll Worker Pods]
-    J --> G
-    J --> K[(Object Storage: Reports/Payslips)]
-    D --> L[Observability: Logs/Metrics/Alerts]
-    J --> L
+    A[HR/Admin UI or API Client] --> B[Laravel API]
+    B --> C[Payroll Service]
+    B --> D[Leave Service]
+    B --> E[Employee Service]
+    C --> F[(MySQL Database)]
+    D --> F
+    E --> F
+    C --> G[(Redis Cache)]
+    C --> H[Queue (Redis/SQS)]
+    H --> I[Worker Pods]
+    I --> F
+    I --> J[(Object Storage - Payslips/Reports)]
 ```
 
-### Payroll Processing Flow
-1. Payroll run is requested (manual trigger or scheduled job).
-2. API validates period, payroll group, and run type.
-3. System acquires payroll-run lock (idempotency + concurrency control).
-4. Employees in scope are chunked and dispatched to queue jobs.
-5. Worker computes gross pay, deductions, tax, adjustments, and net pay.
-6. Result rows are stored transactionally in payroll tables.
-7. Summary is cached and exposed via API.
-8. Payslips/reports are generated asynchronously and stored.
-9. Run is marked `COMPLETED` (or `FAILED` with retry metadata).
+## Architecture Overview
 
-### Service Boundaries
-- Employee Service: master data (employee profile, status, compensation settings).
-- Leave Service: leave requests, overlaps, holiday-aware deductions, balances.
-- Payroll Service: payroll period orchestration, formulas, taxes, contributions, net pay.
-- Holiday/Calendar Service: public holiday source of truth used by leave/payroll.
-- Reporting Service: payslips, exports, audit views.
+- HR triggers payroll through the API.
+- The API validates and coordinates processing.
+- Heavy computations run in background workers.
+- Results are stored in the database.
+- Reports and payslips are generated separately.
+- Redis is used for queueing and caching.
 
-### Queue Usage
-- Use queue for heavy and parallelizable tasks:
-  - per-employee payroll computation
-  - report generation and export
-  - notification sending
-- Benefits:
-  - lower API response latency
-  - controlled retries and dead-letter handling
-  - horizontal worker scaling during payroll windows
+---
 
-### Caching Strategy
-- Redis cache keys:
-  - payroll run summary by `company_id + period`
-  - employee payroll snapshot by `employee_id + period`
-  - holiday calendar by year and tenant
-- Invalidation:
-  - event-driven (`PayrollComputed`, `LeaveApproved`, `HolidayUpdated`)
-  - TTL for non-critical aggregates
-- Guardrails:
-  - cache-aside pattern
-  - include version/timestamp in cache value for safe refresh
+## Payroll Processing Flow
 
-### Scaling Strategy (8k -> 50k Employees)
-- Data:
-  - proper indexes on `(company_id, period)`, `(employee_id, period)`, status columns
-  - read replicas for reporting queries
-  - partition large payroll result tables by period/month
-- Compute:
-  - chunk employees (e.g., 500–1,000/job)
-  - autoscale queue workers by backlog depth and processing SLA
-- API:
-  - stateless app pods behind load balancer
-  - rate limits for expensive endpoints
-- Reliability:
-  - idempotency keys for payroll trigger endpoints
-  - dead-letter queues and replay tooling
-- Observability:
-  - SLO on payroll completion time
-  - queue lag and failed job alerts
+1. HR starts a payroll run for a specific period.
+2. The system checks that payroll for that period has not already been processed.
+3. Employees included in the payroll group are identified.
+4. Employees are processed in batches in the background.
+5. Each employee’s pay is calculated:
+   - salary
+   - allowances
+   - deductions
+   - taxes
+   - net pay
+6. Payroll results are saved securely.
+7. Summary totals are generated.
+8. Payslips and reports are created.
+9. Payroll run is marked as completed.
 
-## B. Payroll Computation Breakdown
+---
 
-### Step-by-Step Net Pay Computation
-1. Determine base gross amount:
-   - prorated basic salary (if partial period)
-   - allowances (fixed + variable)
-2. Compute additions:
-   - overtime
-   - bonuses/incentives
-3. Compute pre-tax deductions:
-   - absences/late deductions
-   - leave without pay
+## Service Responsibilities
+
+### Employee Service
+- Stores employee profiles
+- Compensation settings
+- Employment status
+
+### Leave Service
+- Leave filing and validation
+- Overlap detection
+- Holiday-aware deduction
+
+### Payroll Service
+- Controls payroll run lifecycle
+- Computes salary formulas
+- Handles tax and contributions
+
+### Holiday Service
+- Central source of truth for public holidays
+
+### Reporting Service
+- Generates payslips
+- Exports payroll reports
+- Provides audit data
+
+---
+
+## Why Use Queues?
+
+Payroll computation is heavy.
+
+Instead of computing thousands of employees inside one API request:
+
+- The system sends payroll jobs to a queue.
+- Multiple worker processes handle them in parallel.
+- This improves speed and prevents API timeouts.
+
+### Benefits
+
+- Faster processing
+- Safe retries if something fails
+- Scales easily during payroll periods
+
+---
+
+## Caching Strategy
+
+Redis is used to temporarily store:
+
+- Payroll summary by company + period
+- Employee payroll snapshot
+- Holiday calendar per year
+
+Cache is refreshed when:
+
+- Payroll is completed
+- Leave is approved
+- Holiday list changes
+
+---
+
+## Scaling Strategy (8,000 → 50,000 Employees)
+
+### Data Layer
+
+- Proper indexing on payroll tables
+- Optional read replicas for reports
+- Partition large payroll tables by month
+
+### Processing Layer
+
+- Employees processed in chunks (e.g., 500 per job)
+- Worker pods can scale up during payroll week
+
+### API Layer
+
+- Stateless pods behind load balancer
+- Rate limiting for expensive endpoints
+
+### Reliability
+
+- Prevent duplicate payroll runs
+- Use idempotency keys
+- Monitor queue failures
+
+---
+
+# B. Payroll Computation Breakdown
+
+## Net Pay Computation Steps
+
+1. Calculate base salary (prorated if needed).
+2. Add overtime and bonuses.
+3. Subtract pre-tax deductions (late, absences, unpaid leave).
 4. Compute taxable income.
-5. Calculate statutory deductions:
-   - tax withholding
-   - social/security/health contributions
-6. Apply post-tax adjustments:
-   - loans, penalties, reimbursements
-7. Final net pay:
-   - `Net Pay = Gross + Additions - PreTaxDeductions - Statutory - PostTaxDeductions + Reimbursements`
+5. Deduct taxes and statutory contributions.
+6. Apply post-tax deductions (loans, penalties).
+7. Final Net Pay:
 
-### Formula Explanation
-- Gross Pay:
-  - `Gross = Basic + Allowances + Overtime + Bonus`
-- Taxable Income:
-  - `Taxable = Gross - PreTaxDeductions`
-- Net Pay:
-  - `Net = Taxable - Tax - Contributions - PostTaxDeductions + Reimbursements`
-
-### Rounding Strategy
-- Use decimal precision (`DECIMAL(12,2)` in DB, not float).
-- Round each component to 2 decimals using a consistent rule (half-up).
-- Final net pay re-rounded to 2 decimals after aggregation.
-- Keep raw unrounded intermediate values for audit traceability when required.
-
-### Edge Cases
-- New hire or resigning mid-period (proration).
-- Unpaid leave overlaps holidays/weekends.
-- Negative net pay (carry-forward or cap policy).
-- Retroactive adjustments after payroll finalized.
-- Missing time logs/overtime records.
-- Duplicate allowances loaded from integration.
-
-## C. Concurrency & Locking Strategy
-
-### Preventing Duplicate Payroll Runs
-- Enforce unique run key: `(tenant_id, payroll_period, payroll_group)`.
-- Acquire distributed lock before dispatch.
-- Mark run as `PROCESSING` in a transaction and reject duplicate triggers.
-
-### Example Laravel-Style Pseudocode
-
-```php
-DB::transaction(function () use ($tenantId, $period, $group) {
-    $exists = PayrollRun::query()
-        ->where('tenant_id', $tenantId)
-        ->where('period', $period)
-        ->where('group_code', $group)
-        ->whereIn('status', ['PROCESSING', 'COMPLETED'])
-        ->lockForUpdate()
-        ->exists();
-
-    if ($exists) {
-        throw ValidationException::withMessages([
-            'period' => ['Payroll already processing or completed for this scope.'],
-        ]);
-    }
-
-    PayrollRun::create([
-        'tenant_id' => $tenantId,
-        'period' => $period,
-        'group_code' => $group,
-        'status' => 'PROCESSING',
-    ]);
-});
+```
+Net Pay = Gross + Additions - PreTaxDeductions - Tax - Contributions - PostTaxDeductions + Reimbursements
 ```
 
-### Pessimistic vs Optimistic Locking
-- Pessimistic locking:
-  - locks DB rows during transaction (`FOR UPDATE`)
-  - strong protection against concurrent writes
-  - good for payroll-run trigger and finalization paths
-- Optimistic locking:
-  - uses version/timestamp check on update
-  - better throughput for mostly non-conflicting updates
-  - requires retry logic on conflict
-- Recommendation:
-  - pessimistic for run creation/final close
-  - optimistic for non-critical bulk metadata updates
+---
 
-## D. Production Case Study
+## Formula Summary
 
-### Real Bug
-- Issue: duplicate payroll records for same employee and period.
+**Gross Pay**
 
-### Root Cause
-- Payroll trigger endpoint was called twice within seconds.
-- Queue jobs lacked idempotency guard.
-- No unique constraint for `(employee_id, payroll_run_id)` in result table.
+```
+Gross = Basic + Allowances + Overtime + Bonus
+```
 
-### Prevention
-- Added DB unique index to enforce one result per employee per run.
-- Added idempotency key and distributed lock on run trigger.
-- Added safe upsert behavior in worker.
-- Added run state machine checks (`PENDING -> PROCESSING -> COMPLETED/FAILED`).
+**Taxable Income**
 
-### Monitoring Improvements
-- Alert on:
-  - duplicate key violation spikes
-  - run duration threshold breach
-  - queue backlog and retry spikes
-- Dashboards:
-  - run progress %, processed/failed employees, ETA
-  - net pay anomaly detection (unexpected large variance)
+```
+Taxable = Gross - PreTaxDeductions
+```
 
-## Practical Coding Exercise (Mandatory)
+**Net Pay**
 
-### Git Repository Link
-- Add your repository URL here: `<YOUR_REPO_LINK>`
+```
+Net = Taxable - Tax - Contributions - PostTaxDeductions + Reimbursements
+```
 
-### Implemented: Leave Filing API
+---
 
-Requirements delivered:
-- REST endpoints:
-  - `POST /api/leave-requests`
-  - `GET /api/leave-requests`
-  - supporting endpoints: `GET/POST /api/employees`, `GET/POST /api/holidays`
-- Overlapping date validation:
-  - rejects new leave if it intersects existing leave for same employee
-- Holiday-aware deduction:
-  - `deductible_days` excludes holiday dates inside leave range
-- Database migrations:
-  - `employees`, `holidays`, `leave_requests`
-- PHPUnit test coverage:
-  - valid leave
-  - overlapping leave
-  - holiday edge case
-  - list/filter behavior
+## Rounding Strategy
 
-Architecture and code style delivered:
-- Form Request validation:
-  - `StoreLeaveRequest`, `ListLeaveRequest`, plus employee/holiday requests
-- Service layer:
-  - `LeaveFilingService`, `LeaveOverlapChecker`, `HolidayCalendar`
-- Clean controller:
-  - `LeaveRequestController` delegates business rules to services
-- Resource-based API output:
-  - `LeaveRequestResource`
+- Use DECIMAL(12,2) in database.
+- Avoid floating point numbers.
+- Round each component to 2 decimal places (half-up).
+- Keep raw values if audit traceability is required.
 
-### Test Command
+---
 
-```bash
+## Edge Cases Considered
+
+- New hire or resignation mid-period
+- Leave without pay
+- Retroactive salary adjustments
+- Negative net pay
+- Duplicate imported allowances
+- Missing time logs
+
+---
+
+# C. Concurrency & Locking Strategy
+
+## Preventing Duplicate Payroll Runs
+
+Each payroll run is uniquely identified by:
+
+```
+(tenant_id, payroll_period, payroll_group)
+```
+
+Before starting payroll:
+
+- System checks if a run already exists.
+- If yes → reject request.
+- If no → mark run as PROCESSING.
+
+---
+
+## Locking Strategy
+
+### Pessimistic Locking
+- Locks row during transaction.
+- Used when starting or closing payroll runs.
+
+### Optimistic Locking
+- Uses version/timestamp checks.
+- Better performance for non-critical updates.
+
+Recommended:
+
+- Pessimistic for payroll run creation/finalization.
+- Optimistic for metadata updates.
+
+---
+
+# D. Production Case Study
+
+## Real Issue
+
+Duplicate payroll records were created for the same employee and period.
+
+## Root Cause
+
+- Payroll endpoint triggered twice.
+- No database unique constraint.
+- Worker jobs were not idempotent.
+
+## Solution
+
+- Added unique DB index (employee_id, payroll_run_id).
+- Added distributed lock before payroll dispatch.
+- Implemented safe upsert logic.
+- Enforced payroll state transitions.
+
+## Monitoring Improvements
+
+Added alerts for:
+
+- Duplicate key violations
+- Long-running payroll
+- Queue backlog spikes
+- Failed job rate
+
+---
+
+# Practical Coding Exercise
+
+## Repository
+
+Add link here:
+
+```
+<YOUR_REPO_LINK>
+```
+
+---
+
+# Leave Filing API Implementation
+
+## Implemented Features
+
+### Endpoints
+- POST /api/leave-requests
+- GET /api/leave-requests
+- Employee and Holiday management endpoints
+
+### Core Rules
+- Reject overlapping leave requests
+- Deduct holidays from leave days
+- Store deductible_days
+
+### Database Tables
+- employees
+- holidays
+- leave_requests
+
+### Test Coverage
+- Valid leave request
+- Overlapping leave
+- Holiday edge case
+- List/filter behavior
+
+---
+
+## Architecture & Code Quality
+
+- Form Request validation
+- Service layer for business rules
+- Clean controllers
+- Resource-based API responses
+- PHPUnit feature tests
+
+---
+
+## Run Tests
+
+```
 php artisan test --filter LeaveFilingTest
 ```
