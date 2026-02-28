@@ -1,25 +1,21 @@
-# Lastname_Firstname_SeniorFullstackExam
-
----
-
 # A. Architecture Design
 
 ## High-Level System Architecture
 
 ```mermaid
 flowchart LR
-    A[HR/Admin UI or API Client] --> B[Laravel API]
+    A[HR or Admin Client] --> B[Laravel API]
     B --> C[Payroll Service]
     B --> D[Leave Service]
     B --> E[Employee Service]
-    C --> F[(MySQL Database)]
+    C --> F[(MySQL DB)]
     D --> F
     E --> F
     C --> G[(Redis Cache)]
-    C --> H[Queue (Redis/SQS)]
+    C --> H[Queue]
     H --> I[Worker Pods]
     I --> F
-    I --> J[(Object Storage - Payslips/Reports)]
+    I --> J[(Object Storage)]
 ```
 
 ## Architecture Overview
